@@ -1,0 +1,18 @@
+{
+  "name": "strategy-web",
+  "version": "1.0.0",
+  "description": "选股策略标签化管理与检索 Web 应用",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "import": "node scripts/import.js",
+    "watch": "node scripts/watch.js",
+    "start": "node src/server.js",
+    "dev": "node src/server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "chokidar": "^6.0.0",
+    "express": "^4.19.2"
+  }
+}
