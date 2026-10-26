@@ -46,6 +46,9 @@
   .active-filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .active-filters .tag { background: #fef0f0; color: #f56c6c; border-color: #fbc4c4; }
   .empty { text-align: center; padding: 60px; color: #909399; }
+  .copy-btn { padding: 3px 10px; background: #fff; border: 1px solid #dcdfe6; border-radius: 4px; cursor: pointer; font-size: 11px; color: #606266; margin-left: auto; }
+  .copy-btn:hover { color: #409eff; border-color: #409eff; }
+  .copy-btn.copied { color: #67c23a; border-color: #67c23a; }
 </style>
 </head>
 <body>
@@ -201,6 +204,7 @@ async function refresh() {
         <span class="badge" style="background:#f4f4f5;color:#71717a">${s.style}</span>
         <span class="badge" style="background:${s.riskLevel==='高'?'#fef2f2':s.riskLevel==='中'?'#fffbeb':'#f0fdf4'};color:${s.riskLevel==='高'?'#dc2626':s.riskLevel==='中'?'#d97706':'#16a34a'}">风险${s.riskLevel}</span>
         ${s.tags.map(t => `<span class="tag" style="cursor:default">${t}</span>`).join('')}
+        <button class="copy-btn" data-text="${encodeURIComponent(s.text)}" title="复制完整策略文本">📋 复制</button>
       </div>
       <div class="advice" style="margin-top:8px;padding:8px 12px;background:#f8fafc;border-radius:6px;font-size:12px;color:#475569;line-height:1.7">
         <div>🟢 买入：<b>${s.buyTiming}</b>（持有 ${s.holdingPeriod}）</div>
@@ -219,6 +223,26 @@ async function refresh() {
 }
 
 function goPage(p) { state.page = p; refresh(); }
+
+// 事件委托：复制按钮
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.copy-btn');
+  if (!btn) return;
+  const text = decodeURIComponent(btn.dataset.text);
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+  btn.textContent = '✓ 已复制';
+  btn.classList.add('copied');
+  setTimeout(() => { btn.textContent = '📋 复制'; btn.classList.remove('copied'); }, 1500);
+});
 
 // 绑定工具栏
 document.getElementById('q').addEventListener('input', e => { state.q = e.target.value; state.page=1; refresh(); });

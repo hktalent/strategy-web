@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: strategy-web
+    env: node
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: node src/server.js
+    healthCheckPath: /api/meta
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: SHARD_COUNT
+        value: 8

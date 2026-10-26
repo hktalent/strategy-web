@@ -6,12 +6,10 @@ package-lock.json
 yarn.lock
 pnpm-lock.yaml
 
-# 数据产物（可由 import 重新生成）
-data/strategies_*.db
+# 数据产物（本地 import/watch 产生的临时文件忽略；预构建 db 提交到仓库用于部署）
 data/strategies_*.db-wal
 data/strategies_*.db-shm
 data/strategies_*.db.tmp
-data/meta.json
 data/ai_cache.json
 
 # 日志

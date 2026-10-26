@@ -1,0 +1,237 @@
+{
+  "generatedAt": "2026-10-26T08:31:03.930Z",
+  "totalStrategies": 90694,
+  "totalUsage": 156445,
+  "shardCount": 8,
+  "categories": [
+    "财务基本面",
+    "成长",
+    "趋势技术",
+    "量能资金",
+    "价格形态",
+    "涨停事件",
+    "情绪人气",
+    "股票池属性",
+    "择时"
+  ],
+  "tagRules": [
+    {
+      "tag": "ROE",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "ROA",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "净利润",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "营收",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "毛利率",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "净利率",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "资产负债率",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "现金流",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "市盈率PE",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "市净率PB",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "市销率PS",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "每股收益EPS",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "分红股息",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "营运能力",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "审计/治理",
+      "category": "财务基本面"
+    },
+    {
+      "tag": "利润增长",
+      "category": "成长"
+    },
+    {
+      "tag": "营收增长",
+      "category": "成长"
+    },
+    {
+      "tag": "业绩预告",
+      "category": "成长"
+    },
+    {
+      "tag": "复合成长",
+      "category": "成长"
+    },
+    {
+      "tag": "均线系统",
+      "category": "趋势技术"
+    },
+    {
+      "tag": "MACD",
+      "category": "趋势技术"
+    },
+    {
+      "tag": "KDJ",
+      "category": "趋势技术"
+    },
+    {
+      "tag": "BOLL布林",
+      "category": "趋势技术"
+    },
+    {
+      "tag": "RSI",
+      "category": "趋势技术"
+    },
+    {
+      "tag": "趋势排列",
+      "category": "趋势技术"
+    },
+    {
+      "tag": "筹码分布",
+      "category": "趋势技术"
+    },
+    {
+      "tag": "BIAS乖离",
+      "category": "趋势技术"
+    },
+    {
+      "tag": "ENE轨道",
+      "category": "趋势技术"
+    },
+    {
+      "tag": "量比",
+      "category": "量能资金"
+    },
+    {
+      "tag": "换手率",
+      "category": "量能资金"
+    },
+    {
+      "tag": "成交量",
+      "category": "量能资金"
+    },
+    {
+      "tag": "主力资金",
+      "category": "量能资金"
+    },
+    {
+      "tag": "当日涨幅",
+      "category": "价格形态"
+    },
+    {
+      "tag": "振幅",
+      "category": "价格形态"
+    },
+    {
+      "tag": "K线形态",
+      "category": "价格形态"
+    },
+    {
+      "tag": "价格区间",
+      "category": "价格形态"
+    },
+    {
+      "tag": "涨停",
+      "category": "涨停事件"
+    },
+    {
+      "tag": "连板",
+      "category": "涨停事件"
+    },
+    {
+      "tag": "首板",
+      "category": "涨停事件"
+    },
+    {
+      "tag": "人气排名",
+      "category": "情绪人气"
+    },
+    {
+      "tag": "龙虎榜",
+      "category": "情绪人气"
+    },
+    {
+      "tag": "板块题材",
+      "category": "情绪人气"
+    },
+    {
+      "tag": "股东户数",
+      "category": "情绪人气"
+    },
+    {
+      "tag": "解禁",
+      "category": "情绪人气"
+    },
+    {
+      "tag": "市值规模",
+      "category": "股票池属性"
+    },
+    {
+      "tag": "板块市场",
+      "category": "股票池属性"
+    },
+    {
+      "tag": "上市时间",
+      "category": "股票池属性"
+    },
+    {
+      "tag": "ST/退市",
+      "category": "股票池属性"
+    },
+    {
+      "tag": "企业性质",
+      "category": "股票池属性"
+    },
+    {
+      "tag": "地域",
+      "category": "股票池属性"
+    },
+    {
+      "tag": "早盘择时",
+      "category": "择时"
+    },
+    {
+      "tag": "分时线",
+      "category": "择时"
+    }
+  ],
+  "shardSizes": [
+    11295,
+    11384,
+    11474,
+    11188,
+    11314,
+    11237,
+    11504,
+    11298
+  ]
+}
