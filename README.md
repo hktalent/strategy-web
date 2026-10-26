@@ -1,6 +1,7 @@
 # 选股策略库 Web（strategy-web）
 
 把散落的 9 万+ 条选股策略（自然语言条件）**自动打标签、算评分、Web 检索**。
+<img width="421" alt="image" src="https://github.com/user-attachments/assets/668bb08b-aa6d-443c-8389-76cf6eedbab5" />
 
 ## 项目结构
 
