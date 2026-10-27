@@ -49,6 +49,16 @@
   .copy-btn { padding: 3px 10px; background: #fff; border: 1px solid #dcdfe6; border-radius: 4px; cursor: pointer; font-size: 11px; color: #606266; margin-left: auto; }
   .copy-btn:hover { color: #409eff; border-color: #409eff; }
   .copy-btn.copied { color: #67c23a; border-color: #67c23a; }
+  .sub-conds { margin-top: 8px; border-left: 3px solid #d9ecff; padding-left: 12px; display: none; }
+  .sub-conds.open { display: block; }
+  .sub-cond { background: #fafbfc; border-radius: 6px; padding: 8px 12px; margin-bottom: 6px; font-size: 12px; }
+  .sub-cond .sc-text { font-weight: 600; color: #303133; margin-bottom: 4px; }
+  .sub-cond .sc-scope { display: inline-block; background: #ecf5ff; color: #409eff; padding: 1px 6px; border-radius: 3px; font-size: 11px; margin-right: 6px; }
+  .sub-cond .sc-freq { color: #909399; font-size: 11px; }
+  .sub-cond .sc-row { color: #606266; line-height: 1.6; }
+  .sub-cond .sc-row b { color: #303133; }
+  .sub-cond .sc-limit { color: #e6a23c; }
+  .toggle-conds { font-size: 11px; color: #409eff; cursor: pointer; margin-left: 8px; user-select: none; }
 </style>
 </head>
 <body>
@@ -192,10 +202,16 @@ async function refresh() {
     document.getElementById('pagination').innerHTML = '';
     return;
   }
-  list.innerHTML = data.list.map(s => `
+  let idx = 0;
+  list.innerHTML = data.list.map(s => {
+    const myId = idx++;
+    return `
     <div class="strategy-card">
-      <div class="title">${s.title}</div>
+      <div class="title">${s.title}
+        <span class="toggle-conds" data-id="${myId}" data-text="${encodeURIComponent(s.text)}">▸ 拆分看子条件</span>
+      </div>
       <div class="text" onclick="this.classList.toggle('expanded')">${s.text}</div>
+      <div class="sub-conds" id="conds_${myId}"></div>
       <div class="meta-row">
         <span class="badge badge-composite">综合 ${s.compositeScore}</span>
         <span class="badge badge-usage">使用 ${s.usage} 次</span>
@@ -211,7 +227,8 @@ async function refresh() {
         <div>🔴 卖出：${s.sellTiming}</div>
         <div>🛡 止损：${s.stopLoss} ｜ 止盈：${s.takeProfit}</div>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   // 分页
   const totalPages = Math.ceil(data.total / data.pageSize);
@@ -226,6 +243,46 @@ function goPage(p) { state.page = p; refresh(); }
 
 // 事件委托：复制按钮
 document.addEventListener('click', async (e) => {
+  // 拆分按钮
+  const toggleBtn = e.target.closest('.toggle-conds');
+  if (toggleBtn) {
+    const box = document.getElementById('conds_' + toggleBtn.dataset.id);
+    if (!box) return;
+    if (box.classList.contains('open')) {
+      box.classList.remove('open');
+      toggleBtn.textContent = '▸ 拆分看子条件';
+      return;
+    }
+    box.classList.add('open');
+    toggleBtn.textContent = '▾ 收起子条件';
+    if (box.dataset.loaded) return;
+    box.innerHTML = '<div style="color:#909399;padding:8px">加载中...</div>';
+    try {
+      const r = await fetch('/api/split', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: decodeURIComponent(toggleBtn.dataset.text) }),
+      });
+      const data = await r.json();
+      box.innerHTML = (data.conditions || []).map(c => `
+        <div class="sub-cond">
+          <div class="sc-text">${c.text}
+            <span class="sc-scope">${c.scope || ''}</span>
+            <span class="sc-freq">出现 ${c.freq || 0} 次</span>
+          </div>
+          ${c.value ? `<div class="sc-row"><b>价值：</b>${c.value}</div>` : ''}
+          ${c.func ? `<div class="sc-row"><b>作用：</b>${c.func}</div>` : ''}
+          ${c.features ? `<div class="sc-row"><b>特点：</b>${c.features}</div>` : ''}
+          ${c.range ? `<div class="sc-row"><b>适用范围：</b>${c.range}</div>` : ''}
+          ${c.limitations ? `<div class="sc-row sc-limit"><b>局限/不足：</b>${c.limitations}</div>` : ''}
+        </div>`).join('');
+      box.dataset.loaded = '1';
+    } catch (err) {
+      box.innerHTML = '<div style="color:#f56c6c">加载失败</div>';
+    }
+    return;
+  }
+
   const btn = e.target.closest('.copy-btn');
   if (!btn) return;
   const text = decodeURIComponent(btn.dataset.text);

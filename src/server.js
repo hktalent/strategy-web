@@ -9,11 +9,15 @@ const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 const { DATA_DIR, SHARD_COUNT, shardPath } = require('./buildIndex');
+const { splitConditions } = require('../scripts/buildConditions');
 
 const app = express();
+app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
 const shards = []; // [{db, mtime}]
+let condDb = null;
+let condMtime = 0;
 
 function openShards() {
   for (let i = 0; i < SHARD_COUNT; i++) {
@@ -26,6 +30,18 @@ function openShards() {
     db.pragma('cache_size = -8000'); // 每个分片 8MB 缓存
     shards[i] = { db, mtime };
     console.log(`已开分片 ${i}：${p} @ ${new Date().toLocaleTimeString()}`);
+  }
+  // 子条件库
+  const cp = path.join(DATA_DIR, 'conditions.db');
+  if (fs.existsSync(cp)) {
+    const cm = fs.statSync(cp).mtimeMs;
+    if (!condDb || condMtime !== cm) {
+      if (condDb) condDb.close();
+      condDb = new Database(cp, { readonly: true });
+      condDb.pragma('cache_size = -20000');
+      condMtime = cm;
+      console.log(`已开子条件库：${cp}`);
+    }
   }
 }
 
@@ -186,6 +202,27 @@ app.get('/api/strategy/:id', (req, res) => {
     if (r) return res.json(rowify(r));
   }
   res.status(404).json({ error: 'not found' });
+});
+
+// 拆分策略为子条件并返回每个子条件的分析
+app.post('/api/split', (req, res) => {
+  ensureShardsFresh();
+  const text = String(req.body?.text || '');
+  const parts = splitConditions(text);
+  if (!parts.length) return res.json({ conditions: [] });
+
+  // 批量查 conditions.db
+  const stmt = condDb
+    ? condDb.prepare('SELECT text, freq, scope, value, func, features, limitations, range FROM conditions WHERE text = ?')
+    : null;
+  const conditions = parts.map(p => {
+    const hit = stmt ? stmt.get(p) : null;
+    return hit || {
+      text: p, freq: 0, scope: '其他条件', value: '', func: '',
+      features: '', limitations: '', range: '',
+    };
+  });
+  res.json({ conditions });
 });
 
 app.listen(PORT, () => {
