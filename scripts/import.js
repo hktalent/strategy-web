@@ -3,7 +3,7 @@
  * 一次性全量导入：node scripts/import.js
  */
 const { buildIndex } = require('../src/buildIndex');
-console.log('开始全量重建 ...');
+console.log('开始增量导入 ...');
 const t0 = Date.now();
 const r = buildIndex();
-console.log(`完成：${r.total} 条策略，新增 txt ${r.addedTxt} 条，xgTj 合并重复 ${r.mergedFromXgtj} 条，耗时 ${Date.now() - t0}ms`);
+console.log(`完成：DB 共 ${r.total} 条策略 | 本次新增 ${r.added || 0} | 更新使用次数 ${r.updated || 0} | 跳过(已存在) ${r.skipped || 0} | 耗时 ${Date.now() - t0}ms`);

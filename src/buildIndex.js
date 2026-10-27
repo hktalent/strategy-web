@@ -75,9 +75,7 @@ function shardPath(i) {
 
 function buildSchema(db) {
   db.exec(`
-    DROP TABLE IF EXISTS strategies;
-    DROP TABLE IF EXISTS meta;
-    CREATE TABLE strategies (
+    CREATE TABLE IF NOT EXISTS strategies (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       text TEXT NOT NULL UNIQUE,
       title TEXT NOT NULL,
@@ -98,12 +96,12 @@ function buildSchema(db) {
       has_fundamental INTEGER DEFAULT 0,
       composite_score REAL
     );
-    CREATE INDEX idx_strategies_usage ON strategies(usage DESC);
-    CREATE INDEX idx_strategies_composite ON strategies(composite_score DESC);
-    CREATE INDEX idx_strategies_segments ON strategies(segments DESC);
-    CREATE INDEX idx_strategies_style ON strategies(style);
-    CREATE INDEX idx_strategies_risk ON strategies(risk_level);
-    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+    CREATE INDEX IF NOT EXISTS idx_strategies_usage ON strategies(usage DESC);
+    CREATE INDEX IF NOT EXISTS idx_strategies_composite ON strategies(composite_score DESC);
+    CREATE INDEX IF NOT EXISTS idx_strategies_segments ON strategies(segments DESC);
+    CREATE INDEX IF NOT EXISTS idx_strategies_style ON strategies(style);
+    CREATE INDEX IF NOT EXISTS idx_strategies_risk ON strategies(risk_level);
+    CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
   `);
 }
 
@@ -179,15 +177,16 @@ function buildIndex() {
     e.takeProfit = advice.takeProfit;
   }
 
-  // 3. 分片写入
+  // 3. 分片写入（增量模式）
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  // 清理旧分片
-  for (let i = 0; i < SHARD_COUNT; i++) {
-    for (const suffix of ['', '-wal', '-shm', '-tmp']) {
-      const p = shardPath(i) + suffix;
-      if (fs.existsSync(p)) fs.unlinkSync(p);
-    }
-  }
+
+  // 判断是否首次运行（所有分片都不存在）
+  const anyExists = fs.existsSync(shardPath(0));
+  const isFirstRun = !anyExists;
+
+  let added = 0;
+  let updated = 0;
+  let skipped = 0;
 
   // 按分片分组
   const shardBuckets = Array.from({ length: SHARD_COUNT }, () => []);
@@ -195,53 +194,79 @@ function buildIndex() {
 
   for (let i = 0; i < SHARD_COUNT; i++) {
     const bucket = shardBuckets[i];
-    if (!bucket.length) continue;
-    const tmpPath = shardPath(i) + '.tmp';
-    if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-    const db = new Database(tmpPath);
+    if (!bucket.length && !isFirstRun) continue;
+    const p = shardPath(i);
+    const db = new Database(p);
     db.pragma('journal_mode = DELETE');
     db.pragma('synchronous = OFF');
-    db.pragma('page_size = 1024');
     buildSchema(db);
 
-    const insert = db.prepare(`
-      INSERT INTO strategies (text, title, tags, categories, style, buy_timing, sell_timing, holding_period, risk_level, stop_loss, take_profit, usage, segments, usage_score, complexity_score, diversity_score, has_fundamental, composite_score)
+    const existStmt = db.prepare('SELECT usage FROM strategies WHERE text = ?');
+    const updateStmt = db.prepare('UPDATE strategies SET usage = ? WHERE text = ?');
+    const insertStmt = db.prepare(`
+      INSERT OR IGNORE INTO strategies (text, title, tags, categories, style, buy_timing, sell_timing, holding_period, risk_level, stop_loss, take_profit, usage, segments, usage_score, complexity_score, diversity_score, has_fundamental, composite_score)
       VALUES (@text, @title, @tags, @categories, @style, @buyTiming, @sellTiming, @holdingPeriod, @riskLevel, @stopLoss, @takeProfit, @usage, @segments, @usageScore, @complexityScore, @diversityScore, @hasFundamental, @compositeScore)
     `);
+
     const tx = db.transaction((items) => {
       for (const e of items) {
-        insert.run({
+        const row = existStmt.get(e.text);
+        if (row) {
+          // 已存在：更新使用次数（取最大值），跳过重新打标签
+          const newUsage = Math.max(row.usage, e.usage);
+          if (newUsage > row.usage) {
+            updateStmt.run(newUsage, e.text);
+            updated++;
+          } else {
+            skipped++;
+          }
+          continue;
+        }
+        // 新策略：完整处理后插入
+        insertStmt.run({
           ...e,
           tags: ',' + e.tags.join(',') + ',',
           categories: ',' + e.categories.join(',') + ',',
         });
+        added++;
       }
     });
     tx(bucket);
 
-    // 每个分片存自己的 meta（主要是分片号、分片大小）
     db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run('shardIndex', String(i));
-    db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run('shardCount', String(bucket.length));
     db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run('totalShards', String(SHARD_COUNT));
 
-    db.exec('VACUUM;');
     db.close();
-    fs.renameSync(tmpPath, shardPath(i));
+  }
+
+  // 统计 DB 实际总量（增量模式下 entries 只是本次来源，DB 可能已有历史数据）
+  let dbTotal = 0;
+  let dbTotalUsage = 0;
+  const shardSizes = [];
+  for (let i = 0; i < SHARD_COUNT; i++) {
+    const p = shardPath(i);
+    if (!fs.existsSync(p)) { shardSizes.push(0); continue; }
+    const db = new Database(p, { readonly: true });
+    const c = db.prepare('SELECT COUNT(*) c, COALESCE(SUM(usage),0) u FROM strategies').get();
+    db.close();
+    dbTotal += c.c;
+    dbTotalUsage += c.u;
+    shardSizes.push(c.c);
   }
 
   // 写一份总 meta
   const metaPath = path.join(DATA_DIR, 'meta.json');
   fs.writeFileSync(metaPath, JSON.stringify({
     generatedAt: new Date().toISOString(),
-    totalStrategies: entries.length,
-    totalUsage: entries.reduce((s, e) => s + e.usage, 0),
+    totalStrategies: dbTotal,
+    totalUsage: dbTotalUsage,
     shardCount: SHARD_COUNT,
     categories: TAG_RULES.map(r => r.category).filter((v, i, a) => a.indexOf(v) === i),
     tagRules: TAG_RULES.map(r => ({ tag: r.tag, category: r.category })),
-    shardSizes: shardBuckets.map(b => b.length),
+    shardSizes,
   }, null, 2));
 
-  return { total: entries.length, addedTxt, mergedFromXgtj, shardCount: SHARD_COUNT };
+  return { total: dbTotal, added, updated, skipped, addedTxt, mergedFromXgtj, shardCount: SHARD_COUNT };
 }
 
 module.exports = { buildIndex, normalizeText, DATA_DIR, SHARD_COUNT, shardPath };
