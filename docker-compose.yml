@@ -1,0 +1,21 @@
+services:
+  strategy-web:
+    build: .
+    image: strategy-web:latest
+    container_name: strategy-web
+    restart: unless-stopped
+    ports:
+      # 仅监听本机回环，由 cloudflared 转发到 https://stock.51pwn.com
+      - "127.0.0.1:3000:3000"
+    volumes:
+      # 直接复用本地已构建的分片库，镜像内不打包 300MB 数据
+      - ./data:/app/data:ro
+    environment:
+      - PORT=3000
+      - SHARD_COUNT=8
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
