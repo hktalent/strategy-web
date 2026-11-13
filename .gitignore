@@ -11,6 +11,13 @@ data/strategies_*.db-wal
 data/strategies_*.db-shm
 data/strategies_*.db.tmp
 data/ai_cache.json
+data/.watch-state.json
+data/.xgtj-snapshot.json
+data/meta.json.tmp
+
+# 常驻进程运行时目录
+run/
+logs/
 
 # 日志
 *.log
@@ -21,7 +28,7 @@ npm-debug.log*
 .idea/
 .vscode/
 *.swp
-
+bin
 # 环境变量
 .env
 .env.local

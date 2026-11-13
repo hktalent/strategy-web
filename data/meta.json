@@ -1,7 +1,8 @@
 {
-  "generatedAt": "2026-11-06T02:02:37.939Z",
-  "totalStrategies": 90694,
+  "generatedAt": "2026-11-13T07:18:54.469Z",
+  "totalStrategies": 90695,
   "totalUsage": 156445,
+  "maxUsage": 1312,
   "shardCount": 8,
   "categories": [
     "财务基本面",
@@ -230,7 +231,7 @@
     11474,
     11188,
     11314,
-    11237,
+    11238,
     11504,
     11298
   ]

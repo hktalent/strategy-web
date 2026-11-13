@@ -10,15 +10,20 @@ strategy-web/
 ├── package.json
 ├── src/
 │   ├── tagRules.js        # 标签规则库（关键词 → 标签 + 大类）
-│   ├── buildIndex.js      # 核心构建（规范化→去重→打标签→评分→分片写库）
+│   ├── buildIndex.js      # 核心构建（规范化→去重→打标签→评分→分片写库）+ 增量写入 API
+│   ├── indexer.js         # 增量索引引擎（队列 / 防抖合并 / 分块事务 / xgTj 差分）
 │   └── server.js          # Express API（fan-out 查所有分片，mtime 自动重开）
 ├── scripts/
 │   ├── import.js          # 一次性全量导入
-│   └── watch.js           # 守护进程：监控策略目录自动重建
+│   ├── watch.js           # 常驻增量监听（单实例锁、启动补齐、优雅退出）
+│   ├── daemon.sh          # start/stop/restart/status/logs 后台守护
+│   └── install-launchd.sh # 交给 launchd：开机自启 + 崩溃自动拉起
 ├── public/
 │   └── index.html         # 单页前端
+├── run/                   # watch.lock / watch.pid（运行时，已 gitignore）
+├── logs/                  # watch.log / watch.err.log（已 gitignore）
 └── data/
-    ├── meta.json          # 总元信息（总量、分片数、标签规则）
+    ├── meta.json          # 总元信息（总量、分片数、标签规则、maxUsage）
     └── strategies_{0..7}.db   # 8 个 SQLite 分片，每个 ~8.5MB（< 20MB，可入 git）
 ```
 
@@ -35,16 +40,47 @@ cd ~/MyWork/strategy-web
 npm install
 npm run import           # 首次必须跑一次，生成 data/*.db 分片
 
-# 终端1：Web 服务（分片文件变化时自动重开，无需重启）
+# Web 服务（分片文件变化时自动重开，无需重启）
 npm start                 # http://localhost:3000
 
-# 终端2：监控策略目录 + xgTj.json，变化后自动重建全部分片
-npm run watch
+# watch 常驻后台（见下方「常驻后台」）
+npm run watch:bg
 ```
 
 **全量重建**（标签规则调整后手动跑一次）：
 ```bash
 npm run import
+```
+
+## 常驻后台（watch 始终在跑）
+
+watch 现在只做**增量**：文件变了就只处理这个文件，`xgTj.json` 变了就只比对差分，
+不再"一变就重建全库"。
+
+```bash
+npm run watch:bg        # = bash scripts/daemon.sh start，nohup 常驻 + 单实例锁
+npm run watch:status    # 运行状态 / 累计新增更新数 / 最近日志
+npm run watch:logs      # 实时跟踪 logs/watch.log
+npm run watch:stop      # 优雅停止（先把队列里的变化写完再退出）
+```
+
+要**开机自启 + 崩溃自动拉起**（真正的"始终后台运行"），交给 launchd：
+
+```bash
+bash scripts/install-launchd.sh            # 安装并立即启动（KeepAlive，正常退出不会反复重启）
+bash scripts/install-launchd.sh status     # 查看 launchd 状态
+bash scripts/install-launchd.sh uninstall  # 卸载
+```
+
+> launchd 用系统 node（`/usr/local/bin/node`），不依赖任何沙箱/临时运行时；
+> 日志固定写 `logs/watch.log`（超 20MB 由 daemon.sh 滚动）。
+> 两个入口互斥：`daemon.sh start` 发现 launchd 实例在跑会直接提示已在运行（单实例锁 `run/watch.lock`）。
+
+其它命令：
+
+```bash
+npm run watch:once      # 补齐一次就退出（适合 docker entrypoint / CI）
+npm run watch:full      # 常驻，并强制对 xgTj.json 做一次全量校正
 ```
 
 ### 自定义原始数据路径
@@ -58,11 +94,38 @@ npm run import
 XGTJ_PATH=/path/to/xgTj.json STRATEGY_DIR=/path/to/策略 npm start
 ```
 
-## 自动刷新机制
+## 自动刷新机制（增量 + 异步）
 
-- `scripts/watch.js` 用 chokidar 监控 `~/MyWork/goSqlite_gorm/策略/` 下所有 `.txt` 文件，以及 `config/xgTj.json`
-- 检测到新增/修改/删除后 **防抖 2 秒** 再触发（避免批量写入时频繁重建）
-- 重建流程与 `npm run import` 完全一致：规范化（全角→半角、压缩空白）→ 去重 → 打标签 → 算评分 → 分片写入 `data/strategies_{i}.db`
+### 触发
+
+- chokidar 监控 `~/MyWork/goSqlite_gorm/策略/` **第一层**的 `.txt`（`depth: 0`，不递归进 `eastmoney_data` 那两万多个子目录，CPU 近 0）以及 `config/xgTj.json`
+- `awaitWriteFinish` 等文件写稳（400ms）才触发，避免读到大文件写到一半的内容
+
+### 增量（只写"变化的内容"）
+
+| 变化 | 处理范围 |
+|---|---|
+| 新增/修改某个 `.txt` | 只读这一个文件 → 规范化 → 打标签评分 → 只写它命中的那 **1 个分片**，只 commit 它那 **1 行** |
+| `xgTj.json` 变化 | 用 `.xgtj-snapshot.json`（hash→usage 快照）**差分**，只把「新增」和「usage 变大」的条目写库；文件没变时直接跳过解析 |
+| 已存在但 usage 变大 | 只 `UPDATE` 该行的 usage / usage_score / composite_score |
+| 已存在且无变化 | `INSERT OR IGNORE` + 跳过，不产生写盘 |
+
+实测：插入 1 条新策略 **29ms**；启动补齐 434 个 txt + 90k 条校验 **2.3s**；`xgTj.json` 未变时启动**不解析** 13MB。
+
+### 异步 / 不阻塞
+
+- 事件只入队，不原地处理；防抖 600ms、最长攒 4s 后合并成一个批次（连续写文件只会处理最后状态）
+- 一个批次按 hash 分片 → 每 500 行一个事务 → **事务之间 `setImmediate` 让出事件循环**
+- 上一批没跑完时新变化只打脏标记，跑完自动接下一批，不并发抢写、不堆积
+- 写连接 `busy_timeout=5000`；服务端只读连接也设了 `busy_timeout=3000`，短暂持锁时自动等待而不是报 `SQLITE_BUSY`
+- `meta.json` 原子写（`.tmp` + `rename`）并节流 3s，服务端不会读到半个 JSON
+
+### 一致性
+
+- 单实例锁 `run/watch.lock`：重复启动（含 launchd 与手动同时起）直接退出，绝不会两个进程抢写同一分片
+- 启动自动补齐：目录里所有 txt 过一遍（已存在即跳过），`xgTj.json` 走差分；数据库为空（如第一次部署）自动全量
+- 退出（SIGINT/SIGTERM/SIGHUP）先 `drain` 把队列写完再退出；异常只记日志不退出，由 launchd 拉起
+- 文件被删除只记日志、不删库内记录（避免误删数据），需要清理请手动处理
 - `src/server.js` 每 2 秒检测分片 mtime，变化即重开对应分片连接，前端无需重启
 
 ## 标签体系

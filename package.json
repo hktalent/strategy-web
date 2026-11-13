@@ -7,6 +7,12 @@
   "scripts": {
     "import": "node scripts/import.js",
     "watch": "node scripts/watch.js",
+    "watch:once": "node scripts/watch.js --once",
+    "watch:full": "node scripts/watch.js --full",
+    "watch:bg": "bash scripts/daemon.sh start",
+    "watch:status": "bash scripts/daemon.sh status",
+    "watch:stop": "bash scripts/daemon.sh stop",
+    "watch:logs": "bash scripts/daemon.sh logs",
     "conditions": "node scripts/buildConditions.js",
     "ai": "node scripts/aiEnrich.js",
     "start": "node src/server.js",

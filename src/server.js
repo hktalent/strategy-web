@@ -28,6 +28,7 @@ function openShards() {
     if (shards[i] && shards[i].db) shards[i].db.close();
     const db = new Database(p, { readonly: true });
     db.pragma('cache_size = -8000'); // 每个分片 8MB 缓存
+    db.pragma('busy_timeout = 3000'); // watch 增量写入时短暂持锁，只读连接稍等即可
     shards[i] = { db, mtime };
     console.log(`已开分片 ${i}：${p} @ ${new Date().toLocaleTimeString()}`);
   }
@@ -55,6 +56,7 @@ function ensureShardsFresh() {
       if (shards[i] && shards[i].db) shards[i].db.close();
       const db = new Database(p, { readonly: true });
       db.pragma('cache_size = -8000');
+      db.pragma('busy_timeout = 3000');
       shards[i] = { db, mtime };
       changed = true;
     }
