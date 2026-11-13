@@ -172,9 +172,12 @@ XGTJ_PATH=/path/to/xgTj.json STRATEGY_DIR=/path/to/策略 npm start
 - `GET /api/strategies?tags=ROE,净利润&category=财务基本面&q=涨停&minUsage=5&sort=compositeScore&order=desc&page=1&pageSize=30`
   - `tags`：多选 AND
   - `category`：限定单个大类
-  - `q`：文本模糊搜
-  - `minUsage`：使用次数下限
-  - `sort`：`compositeScore | usage | segments | diversityScore`
+  - `q`：文本检索，**支持整段粘贴**。先用 normalizeText 归一化（全角→半角），再按 `, ; 、 换行 且` 切成条件片段：
+    - 片段之间 **AND**：整段策略只要库里都有就能命中；
+    - AND 全不命中且片段 > 4（判定为"粘贴了整段"）时自动降级**宽松匹配**：取最长 12 个片段，要求至少命中 60%，按命中片段数排序 —— 所以措辞略有差异（"一个月内无解禁" vs "近一个月无解禁"）也能把目标那条顶到第一位；
+    - 响应带 `queryMode`（`and` / `or` / `none`）与 `fragments`（片段数），前端据此提示。
+  - `minUsage`：使用次数下限（新增策略多为 0 次，设成 ≥1 会把它们全过滤掉）
+  - `sort`：`compositeScore | usage | segments | diversityScore`（驼峰、下划线两种写法都接受）
 - `GET /api/strategy/:id` — 单条详情
 
 ## Web 界面

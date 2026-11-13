@@ -112,9 +112,17 @@ async function startup() {
   watcher = chokidar.watch(
     [STRATEGY_DIR, XGTJ_PATH].filter(p => fs.existsSync(p)),
     {
-      ignored: p => path.basename(p).startsWith('.'),
+      // 递归监听（子目录里新增的策略也不会漏），但排除两个巨型/缓存目录：
+      //   eastmoney_data（两万多个子目录，全量递归会吃掉 CPU）
+      //   .DbCache 及任何点开头的隐藏目录
+      ignored: p => {
+        const base = path.basename(p);
+        if (base.startsWith('.')) return true;
+        const rel = path.relative(STRATEGY_DIR, p);
+        return rel.split(path.sep).some(seg => seg === 'eastmoney_data');
+      },
       persistent: true,
-      depth: 0, // 只看策略目录第一层，不递归进 eastmoney_data
+      depth: 4,
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
     }
@@ -139,7 +147,9 @@ async function startup() {
 
 function onTxtEvent(p, event) {
   if (!p.endsWith('.txt')) return;
-  if (path.resolve(path.dirname(p)) !== path.resolve(STRATEGY_DIR)) return;
+  // 只要在策略目录（含子目录）内就算，子目录里的新策略同样入库
+  const rel = path.relative(STRATEGY_DIR, p);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return;
   if (event === 'unlink') {
     log(`文件被移除（保留库内记录）：${path.basename(p)}`);
     return;

@@ -225,9 +225,21 @@ class IncrementalIndexer {
     return { txtCount, xg: xgResult };
   }
 
-  listTxtFiles() {
-    if (!fs.existsSync(STRATEGY_DIR)) return [];
-    return fs.readdirSync(STRATEGY_DIR).filter(f => f.endsWith('.txt'));
+  /** 递归列出策略目录下的 .txt（深度 4，排除 eastmoney_data 与隐藏目录），返回相对路径 */
+  listTxtFiles(dir = STRATEGY_DIR, depth = 4, prefix = '') {
+    if (!fs.existsSync(dir) || depth < 0) return [];
+    let out = [];
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const name = ent.name;
+      if (name.startsWith('.') || name === 'eastmoney_data') continue;
+      const rel = prefix ? `${prefix}/${name}` : name;
+      if (ent.isDirectory()) {
+        out = out.concat(this.listTxtFiles(path.join(dir, name), depth - 1, rel));
+      } else if (name.endsWith('.txt')) {
+        out.push(rel);
+      }
+    }
+    return out;
   }
 
   /**

@@ -8,7 +8,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { DATA_DIR, SHARD_COUNT, shardPath } = require('./buildIndex');
+const { DATA_DIR, SHARD_COUNT, shardPath, normalizeText } = require('./buildIndex');
 const { splitConditions } = require('../scripts/buildConditions');
 
 const app = express();
@@ -104,6 +104,33 @@ app.get('/api/meta', (req, res) => {
   });
 });
 
+/**
+ * 搜索词处理：整段粘贴也要能查到。
+ *  1. 用与入库同一套 normalizeText 归一化（全角→半角、压缩空白）
+ *  2. 按逗号/分号/顿号/换行/"且" 切成若干"条件片段"
+ *  3. 去掉被更长片段包含的冗余片段，控制 LIKE 数量
+ * 返回片段数组，每条 SQL 用 s.text LIKE '%片段%'
+ */
+const MAX_FRAGMENTS = 30;
+
+function splitQuery(raw) {
+  const norm = normalizeText(raw || '');
+  if (!norm) return [];
+  let parts = norm
+    .split(/[,;|、\n]+|(?:\s+且\s+)/)
+    .map(s => s.trim())
+    .filter(s => s.length >= 2);
+  parts = [...new Set(parts)].sort((a, b) => b.length - a.length);
+  // 长片段已包含短片段时，短片段不再单独作为 LIKE 条件（条件数从 30 降到 5~10，快很多）
+  const kept = [];
+  for (const frag of parts) {
+    if (kept.some(k => k.includes(frag))) continue;
+    kept.push(frag);
+    if (kept.length >= MAX_FRAGMENTS) break;
+  }
+  return kept;
+}
+
 app.get('/api/strategies', (req, res) => {
   ensureShardsFresh();
   const {
@@ -119,56 +146,108 @@ app.get('/api/strategies', (req, res) => {
 
   const wantTags = tags ? tags.split(',').map(s => s.trim()).filter(Boolean) : [];
   const kw = (q || '').trim();
+  const fragments = splitQuery(kw);
   const minU = Math.max(0, Number(minUsage) || 0);
-  const sortKey = ['composite_score', 'usage', 'segments', 'diversity_score'].includes(sort) ? sort : 'composite_score';
+  // 前端传的是驼峰（compositeScore / diversityScore），DB 列是下划线，统一映射
+  const SORT_MAP = {
+    composite_score: 'composite_score',
+    compositeScore: 'composite_score',
+    usage: 'usage',
+    segments: 'segments',
+    diversity_score: 'diversity_score',
+    diversityScore: 'diversity_score',
+  };
+  const sortKey = SORT_MAP[sort] || 'composite_score';
   const asc = order === 'asc';
   const p = Math.max(1, Number(page) || 1);
   const ps = Math.min(200, Math.max(1, Number(pageSize) || 50));
 
-  const where = [];
-  const params = {};
+  const baseWhere = [];
+  const baseParams = {};
   wantTags.forEach((t, i) => {
-    where.push(`s.tags LIKE $tag${i}`);
-    params[`tag${i}`] = `%,${t},%`;
+    baseWhere.push(`s.tags LIKE $tag${i}`);
+    baseParams[`tag${i}`] = `%,${t},%`;
   });
   if (category) {
-    where.push(`s.categories LIKE $cat`);
-    params.cat = `%,${category},%`;
+    baseWhere.push(`s.categories LIKE $cat`);
+    baseParams.cat = `%,${category},%`;
   }
   if (minU > 0) {
-    where.push(`s.usage >= $minU`);
-    params.minU = minU;
-  }
-  if (kw) {
-    where.push(`s.text LIKE $kwLike`);
-    params.kwLike = `%${kw}%`;
+    baseWhere.push(`s.usage >= $minU`);
+    baseParams.minU = minU;
   }
 
-  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  // 关键词：片段之间 AND（整段策略粘贴时必须全部命中）；全不命中再降级 OR 做宽松匹配
+  const kwWhere = [];
+  const kwParams = {};
+  fragments.forEach((f, i) => {
+    kwWhere.push(`s.text LIKE $q${i}`);
+    kwParams[`q${i}`] = `%${f}%`;
+  });
+
   const orderSql = `ORDER BY s.${sortKey} ${asc ? 'ASC' : 'DESC'} NULLS LAST`;
 
-  // fan-out：每个分片跑 COUNT + 取前 ps 条（因为要跨分片排序）
-  let total = 0;
-  const candidates = [];
-  for (const s of shards) {
-    if (!s) continue;
-    const cnt = s.db.prepare(`SELECT COUNT(*) c FROM strategies s ${whereSql}`).get(params).c;
-    total += cnt;
-    if (cnt > 0) {
-      const rows = s.db.prepare(`SELECT * FROM strategies s ${whereSql} ${orderSql} LIMIT ?`).all(params, ps);
-      candidates.push(...rows);
+  function runQuery(whereSql, params, extraSelect = '', extraOrder = '') {
+    let total = 0;
+    const candidates = [];
+    for (const s of shards) {
+      if (!s) continue;
+      const cnt = s.db.prepare(`SELECT COUNT(*) c FROM strategies s ${whereSql}`).get(params).c;
+      total += cnt;
+      if (cnt > 0) {
+        const rows = s.db
+          .prepare(`SELECT * ${extraSelect} FROM strategies s ${whereSql} ${extraOrder || orderSql} LIMIT ?`)
+          .all(params, ps);
+        candidates.push(...rows);
+      }
     }
+    return { total, candidates };
   }
 
-  // 跨分片合并排序
+  const andWhere = [...baseWhere, ...kwWhere];
+  const andParams = { ...baseParams, ...kwParams };
+  const whereSql = andWhere.length ? 'WHERE ' + andWhere.join(' AND ') : '';
+  let mode = fragments.length ? 'and' : 'none';
+  let { total, candidates } = runQuery(whereSql, andParams);
+
+  // 降级：只有"像整段粘贴"（片段足够多）时才宽松召回，
+  // 取最长的 12 个片段做命中计数，并要求至少命中 60%，否则视为无关。
+  if (total === 0 && fragments.length > 4) {
+    const loose = fragments.slice(0, 12); // fragments 已按长度降序
+    const minHits = Math.max(2, Math.ceil(loose.length * 0.6));
+    const orWhere = [];
+    const orParams = {};
+    loose.forEach((f, i) => {
+      orWhere.push(`s.text LIKE $q${i}`);
+      orParams[`q${i}`] = `%${f}%`;
+    });
+    const hitExpr = loose.map((_, i) => `(CASE WHEN s.text LIKE $q${i} THEN 1 ELSE 0 END)`).join(' + ');
+    const allWhere = [...baseWhere, `(${orWhere.join(' OR ')})`, `(${hitExpr}) >= $minHits`];
+    const allParams = { ...baseParams, ...orParams, minHits };
+    const res2 = runQuery(
+      'WHERE ' + allWhere.join(' AND '),
+      allParams,
+      `, (${hitExpr}) AS hits`,
+      `ORDER BY hits DESC, s.${sortKey} ${asc ? 'ASC' : 'DESC'} NULLS LAST`
+    );
+    total = res2.total;
+    candidates = res2.candidates;
+    mode = 'or';
+  }
+
+  // 跨分片合并排序（OR 模式先按命中片段数）
   candidates.sort((a, b) => {
+    if (mode === 'or') {
+      const dh = (b.hits || 0) - (a.hits || 0);
+      if (dh) return dh;
+    }
     const d = (a[sortKey] || 0) - (b[sortKey] || 0);
     return asc ? d : -d;
   });
   const start = (p - 1) * ps;
   const list = candidates.slice(start, start + ps).map(rowify);
 
-  res.json({ total, page: p, pageSize: ps, list });
+  res.json({ total, page: p, pageSize: ps, list, queryMode: mode, fragments: fragments.length });
 });
 
 function rowify(r) {
