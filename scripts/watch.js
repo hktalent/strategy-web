@@ -17,6 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const chokidar = require('chokidar');
 const { IncrementalIndexer } = require('../src/indexer');
+const { EmJsonCollector, EM_DIR, STATE_PATH: EM_STATE_PATH } = require('../src/emJson');
 const { STRATEGY_DIR, XGTJ_PATH, readMeta } = require('../src/buildIndex');
 
 const ROOT = path.join(__dirname, '..');
@@ -27,6 +28,8 @@ const PID_PATH = path.join(RUN_DIR, 'watch.pid');
 const args = process.argv.slice(2);
 const ONCE = args.includes('--once');
 const FORCE_FULL = args.includes('--full');
+const EM_DRY = args.includes('--em-dry');       // 只试跑 eastmoney_data 采集，不写库
+const EM_BASELINE = args.includes('--em-baseline'); // 重建增量水线（历史全部跳过）
 const HEARTBEAT_MS = Number(process.env.WATCH_HEARTBEAT_MS || 30 * 60 * 1000);
 
 function stamp() {
@@ -86,11 +89,43 @@ let watcher = null;
 let heartbeat = null;
 let shuttingDown = false;
 
+/* eastmoney_data（json 策略池）增量采集器 —— 与 txt 监听并行，互不影响 */
+const em = new EmJsonCollector({
+  log,
+  onEntries: items => {
+    if (!items || !items.length) return;
+    log(`  ↳ [EM] 采集到 ${items.length} 条新策略，入队待写库`);
+    indexer.queueEntries(items);
+  },
+});
+
 async function startup() {
+  /* ---------- 只针对 EM 采集器的两个诊断模式（不抢锁、不碰 txt 链路） ---------- */
+  if (EM_DRY || EM_BASELINE) {
+    if (EM_BASELINE) {
+      try {
+        if (fs.existsSync(EM_STATE_PATH)) fs.unlinkSync(EM_STATE_PATH);
+      } catch { /* ignore */ }
+      em.init();
+      em.save();
+      log(`[EM] 已重建增量水线，状态：${em.summary()}`);
+      log('（此后只采集水线之后的新增 json，历史不回灌）');
+      process.exit(0);
+    }
+    em.init({ persist: false });
+    const r = em.scan({ dry: true });
+    log(
+      `[EM] dry-run 结果：文件 ${r.files} / 策略 ${r.items} 条 / 待延迟 ${r.pending} / 失败待重试 ${r.failed}` +
+      ` / 水线推进到 ${new Date(r.waterline).toLocaleString('zh-CN', { hour12: false })}`
+    );
+    process.exit(0);
+  }
+
   acquireLock();
   log('='.repeat(64));
   log(`策略目录：${STRATEGY_DIR}`);
   log(`打包数据：${XGTJ_PATH}`);
+  log(`EM 采集：${EM_DIR}${fs.existsSync(EM_DIR) ? '' : '（目录不存在，待命）'}`);
   log(`模式：${ONCE ? '一次性补齐' : FORCE_FULL ? '常驻 + 强制全量校正' : '常驻增量'}`);
   log('='.repeat(64));
 
@@ -102,12 +137,16 @@ async function startup() {
 
   await indexer.catchUp();
 
+  /* ---------- eastmoney_data json 增量采集 ---------- */
+  em.init();
   if (ONCE) {
+    em.scan();
     await indexer.drain();
     log('一次性补齐完成，退出。');
     releaseLock();
     process.exit(0);
   }
+  await em.start(); // 内部先扫一轮，再按 EM_SCAN_INTERVAL_MS 轮询
 
   watcher = chokidar.watch(
     [STRATEGY_DIR, XGTJ_PATH].filter(p => fs.existsSync(p)),
@@ -139,7 +178,7 @@ async function startup() {
     const s = indexer.stats;
     log(
       `心跳 pid=${process.pid} 批次=${s.batches} 新增=${s.added} 更新=${s.updated} ` +
-      `跳过=${s.skipped} 队列=${indexer.txtQueue.size} 运行中=${indexer.running}`
+      `跳过=${s.skipped} 队列=${indexer.txtQueue.size} 运行中=${indexer.running} | ${em.summary()}`
     );
   }, HEARTBEAT_MS);
   heartbeat.unref?.();
@@ -163,6 +202,7 @@ async function shutdown(signal) {
   shuttingDown = true;
   log(`收到 ${signal}，正在收尾（写回队列中的变化）...`);
   if (heartbeat) clearInterval(heartbeat);
+  em.stop();
   if (watcher) await watcher.close().catch(() => {});
   try {
     await indexer.drain();

@@ -98,14 +98,48 @@ XGTJ_PATH=/path/to/xgTj.json STRATEGY_DIR=/path/to/策略 npm start
 
 ### 触发
 
-- chokidar 监控 `~/MyWork/goSqlite_gorm/策略/` **第一层**的 `.txt`（`depth: 0`，不递归进 `eastmoney_data` 那两万多个子目录，CPU 近 0）以及 `config/xgTj.json`
-- `awaitWriteFinish` 等文件写稳（400ms）才触发，避免读到大文件写到一半的内容
+- chokidar 监控 `~/MyWork/goSqlite_gorm/策略/` 的 `.txt`（`depth: 4`，可覆盖子目录；`ignored` 排除 `eastmoney_data` 与点开头的隐藏目录，CPU 近 0）以及 `config/xgTj.json`
+- **`eastmoney_data/*.json` 走独立的「水线增量扫描」**（不走 chokidar，见下节），两者并行互不干扰
+- `awaitWriteFinish` 等文件写稳（400ms）才触发，避免读到大文件写到一半的内容；EM 侧用 `EM_SAFE_MS`（默认 3s）做同样的事
+
+### eastmoney_data（json 策略池）增量采集
+
+上游 `k_dlUCl.go` 会把选股策略写成 `策略/eastmoney_data/<id>_page1.json`：
+
+```json
+{"code":"100","data":[{"xcId":"xc0c694261c20800d4c3",
+  "contentNew":"总市值大于等于50亿小于等于200亿;涨跌幅大于等于3%小于等于5%;",
+  "createTime":"2025-09-09 14:55:47"}]}
+```
+
+`data[].contentNew` 就是策略原文（与 `策略/xc*.txt` 同构），但 chokidar 侧既排除了该目录、又只认 `.txt`，**这条产线的新策略原本会全部丢失**。`src/emJson.js` 专门补这一环：
+
+- **只做增量**：状态存在 `data/.em-json-state.json`，用 `waterlineMs`（mtime 水线）判定新文件；`tieFiles` 记录同一毫秒的文件，避免重复读取
+- **首次启动只建水线**：`waterlineMs = 目录内最大 mtime`，已有的 5 万多个 json 一律跳过，**不回灌、不全量**
+- **去重**：采集时按 `text` 先合并，入库仍走 `UNIQUE(text)` + `INSERT OR IGNORE`，已存在的一律 `跳过`（幂等，同一文件重复落盘也只会计 `跳过`）
+- **半成品保护**：mtime 晚于 `now - EM_SAFE_MS` 的文件视为「正在写入」，推迟到下一轮；解析失败进 `failures` 队列，最多重试 3 次
+- 单轮最多处理 `EM_MAX_FILES`（默认 2000）个文件，剩下的下一轮接着来
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `EM_JSON_DIR` | `<策略目录>/eastmoney_data` | json 池目录 |
+| `EM_SCAN_INTERVAL_MS` | `300000`（5 min） | 轮询周期 |
+| `EM_SAFE_MS` | `3000` | 写稳等待，小于它的文件推迟 |
+| `EM_MAX_FILES` | `2000` | 单轮最多处理文件数 |
+| `EM_MAX_RETRY` | `3` | 解析失败重试次数 |
+| `EM_BACKFILL_SINCE` | 空 | 仅在**首次**建水线时生效，如 `2026-11-22`：只回灌该时刻之后的 json（仍然不是全量） |
+
+```bash
+npm run watch:em-dry        # 试跑一轮：只统计「会采到多少条」，不写库、不落状态
+npm run watch:em-baseline   # 重建水线（历史全部跳过），用于回灌后收回范围
+```
 
 ### 增量（只写"变化的内容"）
 
 | 变化 | 处理范围 |
 |---|---|
 | 新增/修改某个 `.txt` | 只读这一个文件 → 规范化 → 打标签评分 → 只写它命中的那 **1 个分片**，只 commit 它那 **1 行** |
+| `eastmoney_data` 出现新 `.json` | 只解析水线之后的新文件，取出 `data[].contentNew` 合并去重后按分片批量写入 |
 | `xgTj.json` 变化 | 用 `.xgtj-snapshot.json`（hash→usage 快照）**差分**，只把「新增」和「usage 变大」的条目写库；文件没变时直接跳过解析 |
 | 已存在但 usage 变大 | 只 `UPDATE` 该行的 usage / usage_score / composite_score |
 | 已存在且无变化 | `INSERT OR IGNORE` + 跳过，不产生写盘 |

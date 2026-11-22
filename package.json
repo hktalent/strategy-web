@@ -16,7 +16,9 @@
     "conditions": "node scripts/buildConditions.js",
     "ai": "node scripts/aiEnrich.js",
     "start": "node src/server.js",
-    "dev": "node src/server.js"
+    "dev": "node src/server.js",
+    "watch:em-dry": "node scripts/watch.js --em-dry",
+    "watch:em-baseline": "node scripts/watch.js --em-baseline"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

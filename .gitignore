@@ -32,3 +32,4 @@ bin
 # 环境变量
 .env
 .env.local
+data/.em-json-state.json
